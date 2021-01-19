@@ -1,0 +1,90 @@
+%% Clear memory and command window
+clear,clc,close all
+rng default;
+% Parameters
+K = 1000;         % Number of nearest neighbors
+R = 5;         % Ratio between simulated dataset to original dataset 
+% Parameters for EM algorithm
+MaxIt = 15000; % Maximum number of iterations
+Tol = 1e-6;    % Termination tolerance for loglikelihood function
+
+%% Step 1) Reading input files
+
+[filename1,pathname1] = uigetfile('*.xlsx*','Choose the complete dataset');
+[filename,pathname] = uigetfile('*.xlsx*','Choose the incomplete dataset');
+
+% Uploading the complete dataset
+[Comp,txt,str] = ReadData([pathname1,filename1]);
+% Uploading the incomplete dataset
+Incomp = ReadDataI([pathname,filename],str,txt);
+
+if size(Comp)~=size(Incomp)
+    error('The sizes of input databases don''t match')
+end
+n = size(Comp,1);
+
+%% Step 2) Identifying the missing data
+[row,col] = find(isnan(Incomp)); % indices for missing data
+Per = 100*length(row)/numel(Comp); % Percentage of missing data
+disp('The indices for missing data :')
+t = table(row,col); disp(t);
+disp([num2str(Per) '% of data is missing']); disp(' ');
+% Saving rows of missing data to an excel file
+delete('Missing Data.xls');
+idx = unique(row); 
+xlswrite('Missing Data',Incomp(idx,:))
+
+%% Step 3) Using GMM-KNN imputation method
+
+% First GMM is used to generate larger data set
+disp('Density estimation using GMM :') 
+Kmax = size(Comp,2);
+AIC = Inf*ones(1,Kmax); GMM = cell(1,Kmax); %Preallocation
+for k=1:Kmax
+    try
+        disp(['For number of components (K) = ',num2str(k)])
+        GMM{k} = fitgmdist(Comp,k,'Options',statset('Display',...
+            'final','MaxIter',MaxIt,'TolFun',Tol),'CovarianceType','diagonal');
+        AIC(k)= GMM{k}.AIC;
+    catch 
+        disp('Convergence can''t be achieved')
+    end
+end
+% Show the best number of components
+[~,Best_K] = min(AIC); disp(' ')
+disp(['Best number of components is ',num2str(Best_K)])
+GMM = GMM{Best_K};
+% Showing GMM parameters
+disp(' ');disp(GMM);
+disp('The positions of each component mean : ')
+disp(GMM.mu)
+% Extending dataset using GMM calculated
+Comp_sim = random(GMM,fix(R*n));
+Comp_sim = [Comp_sim;Incomp];     % Append examples with missing data
+
+% Second KNN is used to estimate missing data
+for i=1:length(idx)
+    tmp1 = Incomp(idx(i),:);
+    Dist = zeros(fix(R*n),1);
+    nanidx = isnan(tmp1);
+    tmp1(nanidx)=[];
+    Comp_tmp = Comp_sim;
+    Comp_tmp(:,nanidx)=[];
+    for j=1:n
+        tmp2 = Comp_tmp(j,:);
+        Dist(j) = sum((tmp1-tmp2).^2);
+    end
+    [~,index] = sort(Dist);
+    index = index(1:K);
+    tmp = Comp_sim(index,:);
+    tmp = mean(tmp);
+    Incomp(idx(i),nanidx) = tmp(nanidx);
+end
+
+%% Step 4) Comparison and NRMS evaluation
+% delete('NRMS.xls');
+xlswrite('NRMS',Incomp) % Saving NRMS in excel file
+nrms = NRMS(Comp,Incomp);
+nrms = nrms; % Make NRMS scores in percentage
+disp(' ');disp(['The overall NRMS score: ' num2str(nrms) ])
+
